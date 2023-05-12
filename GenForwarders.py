@@ -94,7 +94,7 @@ def GenerateSymbolMapping(importLibPath):
 		nameType = output.stdout.readline().strip().decode("windows-1251")
 		output.stdout.readline() # hint
 		name = output.stdout.readline().strip().decode("windows-1251")
-		
+
 		# symbol line is in format of Symbol name : <symbol> [(extra info)]
 		symbol = strippedLine.split(":")[1].strip().split(" ")[0].strip()
 		name = name.split(":")[1].strip()
@@ -105,7 +105,7 @@ def GenerateSymbolMapping(importLibPath):
 		elif nameType == "name":
 			finalMapping = name
 		elif nameType == "undecorate":
-			finalMapping = "_" + name
+			finalMapping = f"_{name}"
 		elif nameType == "exportas":
 			# exportas is seemingly used for symbol aliases, and can be ignored
 			# since we process this table by enumerating exports, we only
@@ -248,7 +248,7 @@ for arch in archs:
 		modulePath = item[0]
 		module = os.path.splitext(os.path.basename(modulePath))[0]
 
-		if module in importLibMapping.keys() and None == importLibMapping[module]:
+		if module in importLibMapping.keys() and importLibMapping[module] is None:
 			# We're skipping this library on purpose.
 			continue
 		symbolMapping = GenerateSymbolMapping(os.path.join(GetImportLibFolder(arch), importLibMapping[module]))
@@ -267,36 +267,31 @@ for arch in archs:
 
 		with open(os.path.join(outputFolder, "version.rc"), "w") as resFile:
 			WriteVersionInfo(resFile, module)
-		outputFile = open(os.path.join(outputFolder, module + "_app.cpp"), "w")
-		
-		output = subprocess.Popen([GetDumpbin(), "/exports", modulePath], stdout=subprocess.PIPE)
-		headerParsed = False
-		for line in iter(output.stdout.readline,b''):
-			strippedLine = line.strip().decode("windows-1251") 
-			if not headerParsed:
-				if ("ordinal" in strippedLine and "hint" in strippedLine):
-					# Skip line after header
-					output.stdout.readline()
-					headerParsed = True
-				continue
-			
-			if strippedLine == "Summary":
-				break
-				
-			if strippedLine == "":
-				continue
-			
-			function = list(filter(None, strippedLine.split(" ")))[3]
-			if function not in symbolMapping:
-				# handle edge case for _EH_PROLOG as for some reason it is not in the symbol table and is only in X86.
-				if function == "_EH_prolog":
+		with open(os.path.join(outputFolder, f"{module}_app.cpp"), "w") as outputFile:
+			output = subprocess.Popen([GetDumpbin(), "/exports", modulePath], stdout=subprocess.PIPE)
+			headerParsed = False
+			for line in iter(output.stdout.readline,b''):
+				strippedLine = line.strip().decode("windows-1251")
+				if not headerParsed:
+					if ("ordinal" in strippedLine and "hint" in strippedLine):
+						# Skip line after header
+						output.stdout.readline()
+						headerParsed = True
+					continue
+
+				if strippedLine == "Summary":
+					break
+
+				if strippedLine == "":
+					continue
+
+				function = list(filter(None, strippedLine.split(" ")))[3]
+				if function in symbolMapping:
+					outputFile.write(str.format("""#pragma comment(linker, "/export:{0}={1}.{2}")\n""", symbolMapping[function], module, function))
+
+				elif function == "_EH_prolog":
 					outputFile.write(str.format("""#pragma comment(linker, "/export:{0}={1}.{2}")\n""", "__EH_prolog", module, function))
 				else:
 					errors += [[arch, module, function]]
-			else:
-				outputFile.write(str.format("""#pragma comment(linker, "/export:{0}={1}.{2}")\n""", symbolMapping[function], module, function))
-				
-		outputFile.close()
-
 print(errors)
 
